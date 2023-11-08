@@ -16,6 +16,7 @@ public final class PersonLdap {
 	private @Attribute(name = "cn") String cn;
 	private @Attribute(name = "sn") String sn;
 	private @Attribute(name = "givenName") String givenName;
+	private @Attribute(name = "memberOf") List<String> memberOf;
 	private @Attribute(name = "displayName") String displayName;
 	private @Attribute(name = "schacDateOfBirth") String schacDateOfBirth;
 	private @Attribute(name = "schacPlaceOfBirth") String schacPlaceOfBirth;
@@ -52,7 +53,7 @@ public final class PersonLdap {
 	private @Attribute(name = "supannCodeINE") String supannCodeINE;
 	private @Attribute(name = "supannEtuId") String supannEtuId;
 	private @Attribute(name = "supannEtuEtape") String supannEtuEtape;
-	private @Attribute(name = "supannEtuAnneeInscription") String supannEtuAnneeInscription;
+	private @Attribute(name = "supannEtuAnneeInscription") List<String> supannEtuAnneeInscription;
 	private @Attribute(name = "supannEtuSecteurDisciplinaire") String supannEtuSecteurDisciplinaire;
 	private @Attribute(name = "supannEtuDiplome") String supannEtuDiplome;
 	private @Attribute(name = "supannEtuTypeDiplome") String supannEtuTypeDiplome;
@@ -96,6 +97,14 @@ public final class PersonLdap {
 
 	public void setGivenName(String givenName) {
 		this.givenName = givenName;
+	}
+
+	public List<String> getMemberOf() {
+		return memberOf;
+	}
+
+	public void setMemberOf(List<String> memberOf) {
+		this.memberOf = memberOf;
 	}
 
 	public String getDisplayName() {
@@ -386,11 +395,11 @@ public final class PersonLdap {
 		this.supannEtuEtape = supannEtuEtape;
 	}
 
-	public String getSupannEtuAnneeInscription() {
+	public List<String> getSupannEtuAnneeInscription() {
 		return supannEtuAnneeInscription;
 	}
 
-	public void setSupannEtuAnneeInscription(String supannEtuAnneeInscription) {
+	public void setSupannEtuAnneeInscription(List<String> supannEtuAnneeInscription) {
 		this.supannEtuAnneeInscription = supannEtuAnneeInscription;
 	}
 

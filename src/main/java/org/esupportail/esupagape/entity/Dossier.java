@@ -5,14 +5,14 @@ import org.esupportail.esupagape.entity.enums.enquete.ModFrmn;
 import org.esupportail.esupagape.entity.enums.enquete.TypFrmn;
 
 import jakarta.persistence.*;
+
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 @Entity
-@Table(
-        uniqueConstraints={@UniqueConstraint(columnNames = {"individu_id", "year"})}
-)
+@Table(uniqueConstraints = {@UniqueConstraint(columnNames = {"individu_id", "year"})})
 public class Dossier {
 
     @Id
@@ -30,11 +30,11 @@ public class Dossier {
 
     @ElementCollection(targetClass = Classification.class, fetch = FetchType.EAGER)
     @Enumerated(EnumType.STRING)
-    private Set<Classification> classifications;
+    private Set<Classification> classifications = new HashSet<>();
 
     @ElementCollection(targetClass = TypeSuiviHandisup.class, fetch = FetchType.EAGER)
     @Enumerated(EnumType.STRING)
-    private Set<TypeSuiviHandisup> typeSuiviHandisup;
+    private Set<TypeSuiviHandisup> typeSuiviHandisup = new HashSet<>();
 
     @Enumerated(EnumType.STRING)
     private Etat etat;
@@ -42,7 +42,7 @@ public class Dossier {
     @ElementCollection(targetClass = Mdph.class, fetch = FetchType.EAGER)
     @Enumerated(EnumType.STRING)
 //TODO plusieurs possible + synchro avec l'enquete
-    private Set<Mdph>  mdphs;
+    private Set<Mdph> mdphs = new HashSet<>();
 
     @Enumerated(EnumType.STRING)
     private RentreeProchaine rentreeProchaine;
@@ -75,6 +75,8 @@ public class Dossier {
 
     private String formAddress;
 
+    private String campus;
+
     private String codComposante;
 
     private String composante;
@@ -87,6 +89,9 @@ public class Dossier {
 
     private Boolean alternance;
 
+    private Boolean hasScholarship;
+
+    private Boolean atypie;
     @ManyToOne
     private Individu individu;
 
@@ -281,6 +286,14 @@ public class Dossier {
         this.formAddress = formAddress;
     }
 
+    public String getCampus() {
+        return campus;
+    }
+
+    public void setCampus(String campus) {
+        this.campus = campus;
+    }
+
     public String getCodComposante() {
         return codComposante;
     }
@@ -327,6 +340,22 @@ public class Dossier {
 
     public void setAlternance(Boolean alternance) {
         this.alternance = alternance;
+    }
+
+    public Boolean getHasScholarship() {
+        return hasScholarship;
+    }
+
+    public void setHasScholarship(Boolean hasScholarship) {
+        this.hasScholarship = hasScholarship;
+    }
+
+    public Boolean getAtypie() {
+        return atypie;
+    }
+
+    public void setAtypie(Boolean atypie) {
+        this.atypie = atypie;
     }
 
     public Individu getIndividu() {

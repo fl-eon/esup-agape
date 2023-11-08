@@ -14,6 +14,7 @@ import org.esupportail.esupagape.exception.AgapeRuntimeException;
 import org.esupportail.esupagape.repository.ExcludeIndividuRepository;
 import org.esupportail.esupagape.repository.IndividuRepository;
 import org.esupportail.esupagape.service.interfaces.importindividu.IndividuSourceService;
+import org.esupportail.esupagape.service.ldap.PersonLdap;
 import org.esupportail.esupagape.service.utils.UtilsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +33,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
+import java.sql.SQLException;
 import java.text.MessageFormat;
 import java.time.LocalDate;
 import java.time.Month;
@@ -87,7 +89,7 @@ public class IndividuService {
     }
 
     @Transactional
-    public void importIndividus() throws AgapeException {
+    public void importIndividus() throws AgapeException, SQLException {
         logger.info("Import individus started");
         List<Individu> individus = individuRepository.findAll();
         List<ExcludeIndividu> excludeIndividus = excludeIndividuRepository.findAll();
@@ -98,7 +100,7 @@ public class IndividuService {
             List<Dossier> dossiers = new ArrayList<>();
             for (Individu individu : individusToCreate) {
                 logger.info("Importing : " + individu.getNumEtu() + " " + individu.getFirstName() + " " + individu.getName());
-                Dossier dossier = dossierService.create(individu, null, StatusDossier.IMPORTE);
+                Dossier dossier = dossierService.create("system", individu, null, StatusDossier.IMPORTE);
                 dossiers.add(dossier);
                 individu.getDossiers().add(dossier);
             }
@@ -122,7 +124,7 @@ public class IndividuService {
         logger.info("Sync individus done : " + count);
     }
 
-    public void save(Individu individuToAdd, TypeIndividu typeIndividu, String force) throws AgapeJpaException {
+    public void save(String eppn, Individu individuToAdd, TypeIndividu typeIndividu, String force) throws AgapeJpaException {
         ExcludeIndividu excludeIndividu = null;
         if (StringUtils.hasText(individuToAdd.getNumEtu())) {
             excludeIndividu = excludeIndividuRepository.findByNumEtuHash(new DigestUtils("SHA3-256").digestAsHex(individuToAdd.getNumEtu()));
@@ -138,14 +140,14 @@ public class IndividuService {
             individuToAdd.setNumEtu(null);
         }
         if (foundIndividu != null) {
-            dossierService.create(foundIndividu, null, StatusDossier.AJOUT_MANUEL);
+            dossierService.create(eppn, foundIndividu, null, StatusDossier.AJOUT_MANUEL);
         } else {
             if (excludeIndividu != null) {
                 // suppression de l'exclusion si l’insertion est forcée
                 excludeIndividuRepository.delete(excludeIndividu);
             }
             individuRepository.save(individuToAdd);
-            dossierService.create(individuToAdd, typeIndividu, StatusDossier.AJOUT_MANUEL);
+            dossierService.create(eppn, individuToAdd, typeIndividu, StatusDossier.AJOUT_MANUEL);
         }
     }
 
@@ -163,49 +165,57 @@ public class IndividuService {
     }
 
     @Transactional
-    public Individu create(Individu individu, TypeIndividu typeIndividu, String force) throws AgapeJpaException {
+    public Individu create(PersonLdap personLdap, Individu individu, TypeIndividu typeIndividu, String force) throws AgapeJpaException {
         Individu individuTestIsExist = null;
         if (StringUtils.hasText(individu.getNumEtu())) {
             individuTestIsExist = getIndividu(individu.getNumEtu());
             if (individuTestIsExist == null) {
-                individuTestIsExist = createFromSources(individu.getNumEtu(), force);
+                individuTestIsExist = createFromSources(personLdap.getEduPersonPrincipalName(), individu.getNumEtu(), force);
             }
         } else if (StringUtils.hasText(individu.getCodeIne())) {
             individuTestIsExist = getIndividu(individu.getCodeIne());
             if (individuTestIsExist == null) {
-                individuTestIsExist = createFromSources(individu.getCodeIne(), force);
+                individuTestIsExist = createFromSources(personLdap.getEduPersonPrincipalName(), individu.getCodeIne(), force);
             }
         } else if (StringUtils.hasText(individu.getName()) && StringUtils.hasText(individu.getFirstName()) && individu.getDateOfBirth() != null) {
             individu.setCodeIne(null);
             individuTestIsExist = getIndividu(individu.getName(), individu.getFirstName(), individu.getDateOfBirth());
             if (individuTestIsExist == null) {
-                Individu newIndividu = createFromSources(individu.getName(), individu.getFirstName(), individu.getDateOfBirth(), force);
+                Individu newIndividu = createFromSources(personLdap.getEduPersonPrincipalName(), individu.getName(), individu.getFirstName(), individu.getDateOfBirth(), force);
                 if (newIndividu != null) {
                     return newIndividu;
                 } else {
-                    save(individu, typeIndividu, force);
+                    save(personLdap.getEduPersonPrincipalName(), individu, typeIndividu, force);
                     return individu;
                 }
             }
         }
+        Dossier newDossier = null;
         if (individuTestIsExist != null) {
-            if (individuTestIsExist.getDossiers().stream().noneMatch(dossier -> dossier.getYear().equals(utilsService.getCurrentYear()))) {
-                Dossier dossier = dossierService.create(individuTestIsExist, null, StatusDossier.AJOUT_MANUEL);
-                syncService.syncDossier(dossier.getId());
+            List<Dossier> dossiers = individuTestIsExist.getDossiers().stream().filter(dossier -> dossier.getYear().equals(utilsService.getCurrentYear())).toList();
+            if (dossiers.isEmpty()) {
+                newDossier = dossierService.create(personLdap.getEduPersonPrincipalName(), individuTestIsExist, null, StatusDossier.AJOUT_MANUEL);
+            } else {
+                newDossier = dossiers.get(0);
             }
+            individu = individuTestIsExist;
+        } else if (StringUtils.hasText(individu.getCodeIne()) && StringUtils.hasText(individu.getName()) && StringUtils.hasText(individu.getFirstName()) && individu.getDateOfBirth() != null && StringUtils.hasText(individu.getSex())) {
+            save(personLdap.getEduPersonPrincipalName(), individu, typeIndividu, force);
+        }
+        if (individu.getId() != null) {
             try {
-                syncService.syncIndividu(individuTestIsExist.getId());
+                syncService.syncIndividu(individu.getId());
             } catch (AgapeJpaException e) {
                 throw new RuntimeException(e);
             }
-            return individuTestIsExist;
-        } else if (StringUtils.hasText(individu.getCodeIne()) && StringUtils.hasText(individu.getName()) && StringUtils.hasText(individu.getFirstName()) && individu.getDateOfBirth() != null && StringUtils.hasText(individu.getSex())) {
-            save(individu, typeIndividu, force);
+        }
+        if(newDossier != null) {
+            syncService.syncDossier(newDossier.getId());
         }
         return individu;
     }
 
-    public Individu createFromSources(String code, String force) throws AgapeJpaException {
+    public Individu createFromSources(String eppn, String code, String force) throws AgapeJpaException {
         Individu individuFromSources = null;
         for (IndividuSourceService individuSourceService : individuSourceServices) {
             individuFromSources = individuSourceService.getIndividuByNumEtu(code);
@@ -226,12 +236,12 @@ public class IndividuService {
             if(individuTestIsExist != null) {
                 return individuTestIsExist;
             }
-            save(individuFromSources, null, force);
+            save(eppn, individuFromSources, null, force);
         }
         return individuFromSources;
     }
 
-    public Individu createFromSources(String name, String firstName, LocalDate dateOfBirth, String force) throws AgapeJpaException {
+    public Individu createFromSources(String eppn, String name, String firstName, LocalDate dateOfBirth, String force) throws AgapeJpaException {
         Individu individuFromSources = null;
         for (IndividuSourceService individuSourceService : individuSourceServices) {
             individuFromSources = individuSourceService.getIndividuByProperties(name, firstName, dateOfBirth);
@@ -240,7 +250,7 @@ public class IndividuService {
             }
         }
         if (individuFromSources != null) {
-            save(individuFromSources, null, force);
+            save(eppn, individuFromSources, null, force);
         }
         return individuFromSources;
     }
@@ -322,8 +332,8 @@ public class IndividuService {
                 individu.setName("Anonyme");
                 individu.setFirstName("Anonyme");
                 individu.setDateOfBirth(LocalDate.of(yearOfBirth, Month.JANUARY, 1));
-                individu.setEppn("example@example.org");
-                individu.setEmailEtu("exampleetu@example.org");
+                individu.setEppn("example@univ-rouen.fr");
+                individu.setEmailEtu("exampleetu@univ-rouen.fr");
                 individu.setContactPhone("0000000000");
                 individu.setFixAddress("");
                 individu.setFixCity("");
@@ -337,7 +347,7 @@ public class IndividuService {
                         aideHumaine.setNameAidant("AnonymeAidant");
                         aideHumaine.setFirstNameAidant("AnonymeAidant");
                         aideHumaine.setDateOfBirthAidant(LocalDate.of(aidantYearOfBirth, Month.FEBRUARY, 1));
-                        aideHumaine.setEmailAidant("exampleAidant@example.org");
+                        aideHumaine.setEmailAidant("exampleAidant@univ-rouen.fr");
                         aideHumaine.setPhoneAidant("0000000000");
                     }
                 }
@@ -349,7 +359,7 @@ public class IndividuService {
     @Transactional
     public void anonymiseIndividu(Long individuId) {
         Individu individu = individuRepository.findById(individuId).orElse(null);
-        if (individu != null && !individu.getNumEtu().startsWith("Anonyme")) {
+        if (individu != null && (individu.getNumEtu() == null || !individu.getNumEtu().startsWith("Anonyme"))) {
             logger.info("anonymise " + individu.getNumEtu());
             individu.setNumEtu("Anonyme" + individu.getId());
             individu.setCodeIne("Anonyme" + individu.getId());
@@ -359,11 +369,12 @@ public class IndividuService {
                 int yearOfBirth = individu.getDateOfBirth().getYear();
                 individu.setDateOfBirth(LocalDate.of(yearOfBirth, Month.JANUARY, 1));
             }
-            individu.setEppn("example@example.org");
-            individu.setEmailEtu("exampleetu@example.org");
+            individu.setEppn("example@univ-rouen.fr");
+            individu.setEmailEtu("exampleetu@univ-rouen.fr");
             individu.setContactPhone("0000000000");
             individu.setFixAddress("");
             individu.setFixCity("");
+            individu.setPhotoId("");
             if(StringUtils.hasText(individu.getFixCP())) {
                 individu.setFixCP(individu.getFixCP().substring(0, 2));
             }
@@ -397,7 +408,7 @@ public class IndividuService {
                         aideHumaine.setNumEtuAidant("AnonymeAidant" + aideHumaine.getId());
                         aideHumaine.setNameAidant("AnonymeAidant");
                         aideHumaine.setFirstNameAidant("AnonymeAidant");
-                        aideHumaine.setEmailAidant("exampleAidant@example.org");
+                        aideHumaine.setEmailAidant("exampleAidant@univ-rouen.fr");
                         aideHumaine.setPhoneAidant("0000000000");
                     }
                 }

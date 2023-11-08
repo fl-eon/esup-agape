@@ -1,5 +1,8 @@
 package org.esupportail.esupagape.service;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.TypedQuery;
+import jakarta.persistence.criteria.*;
 import org.esupportail.esupagape.dtos.ComposanteDto;
 import org.esupportail.esupagape.dtos.DocumentDto;
 import org.esupportail.esupagape.dtos.DossierIndividuClassDto;
@@ -30,9 +33,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.TypedQuery;
-import jakarta.persistence.criteria.*;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.*;
@@ -57,22 +57,25 @@ public class DossierService {
 
     private final EntityManager em;
 
-    public DossierService(UtilsService utilsService, List<DossierInfosService> dossierInfosServices, DossierRepository dossierRepository, DocumentRepository documentRepository, DocumentService documentService, SyncService syncService, EntityManager em) {
+    private final LogService logService;
+
+    public DossierService(UtilsService utilsService, List<DossierInfosService> dossierInfosServices, DossierRepository dossierRepository, DocumentRepository documentRepository, DocumentService documentService, SyncService syncService, EntityManager em, LogService logService) {
         this.utilsService = utilsService;
         this.documentRepository = documentRepository;
         this.documentService = documentService;
         this.syncService = syncService;
         this.em = em;
+        this.logService = logService;
         Collections.reverse(dossierInfosServices);
         this.dossierInfosServices = dossierInfosServices;
         this.dossierRepository = dossierRepository;
     }
 
-    public Dossier create(Individu individu, TypeIndividu typeIndividu, StatusDossier statusDossier) {
+    @Transactional
+    public Dossier create(String eppn, Individu individu, TypeIndividu typeIndividu, StatusDossier statusDossier) {
         Dossier dossier = new Dossier();
         dossier.setYear(utilsService.getCurrentYear());
         dossier.setIndividu(individu);
-        dossier.setStatusDossier(statusDossier);
         if (StringUtils.hasText(individu.getNumEtu())) {
             dossier.setType(TypeIndividu.ETUDIANT);
         } else if (typeIndividu != null) {
@@ -82,7 +85,19 @@ public class DossierService {
         }
         dossierRepository.save(dossier);
         individu.getDossiers().add(dossier);
+        changeStatutDossier(dossier.getId(), statusDossier, eppn);
         return dossier;
+    }
+
+    @Transactional
+    public void changeStatutDossier(Long id, StatusDossier statusDossier, String eppn) {
+        Dossier dossier = getById(id);
+        String initialStatus = "";
+        if (dossier.getStatusDossier() != null) {
+            initialStatus = dossier.getStatusDossier().name();
+        }
+        logService.create(eppn, id, initialStatus, statusDossier.name());
+        dossier.setStatusDossier(statusDossier);
     }
 
     public void deleteDossier(Long id) {
@@ -130,19 +145,20 @@ public class DossierService {
     }
 
     @Transactional
-    public void update(Long id, Dossier dossier) {
+    public void update(Long id, Dossier dossier, String eppn) {
         Dossier dossierToUpdate = getById(id);
         if (dossierToUpdate.getYear() != utilsService.getCurrentYear()) {
             throw new AgapeYearException();
         }
-        dossierToUpdate.setClassifications(dossier.getClassifications());
+        dossierToUpdate.getClassifications().addAll(dossier.getClassifications());
         dossierToUpdate.setEtat(dossier.getEtat());
         dossierToUpdate.setMdphs(dossier.getMdphs());
         dossierToUpdate.setTaux(dossier.getTaux());
-        dossierToUpdate.setTypeSuiviHandisup(dossier.getTypeSuiviHandisup());
+        dossierToUpdate.getTypeSuiviHandisup().addAll(dossier.getTypeSuiviHandisup());
         dossierToUpdate.setSuiviHandisup(dossier.getSuiviHandisup());
         dossierToUpdate.setEmployee(dossier.getEmployee());
         dossierToUpdate.setAlternance(dossier.getAlternance());
+        dossierToUpdate.setAtypie(dossier.getAtypie());
         dossierToUpdate.setEtat(dossier.getEtat());
         dossierToUpdate.setRentreeProchaine(dossier.getRentreeProchaine());
         dossierToUpdate.setCommentaire(dossier.getCommentaire());
@@ -150,14 +166,14 @@ public class DossierService {
         dossierToUpdate.setModeFormation(dossier.getModeFormation());
         if(StringUtils.hasText(dossier.getNiveauEtudes())) dossierToUpdate.setNiveauEtudes(dossier.getNiveauEtudes());
         if(StringUtils.hasText(dossier.getSecteurDisciplinaire())) dossierToUpdate.setSecteurDisciplinaire(dossier.getSecteurDisciplinaire());
-        if(StringUtils.hasText(dossier.getFormAddress())) dossierToUpdate.setSecteurDisciplinaire(dossier.getFormAddress());
+        if(StringUtils.hasText(dossier.getFormAddress())) dossierToUpdate.setFormAddress(dossier.getFormAddress());
         if (StringUtils.hasText(dossier.getLibelleFormation())) {
             dossierToUpdate.setLibelleFormation(dossier.getLibelleFormation());
         }
         if (StringUtils.hasText(dossier.getFormAddress())) {
             dossierToUpdate.setFormAddress(dossier.getFormAddress());
         }
-        dossierToUpdate.setStatusDossier(StatusDossier.ACCUEILLI);
+        changeStatutDossier(id, StatusDossier.ACCUEILLI, eppn);
     }
 
     public DossierInfos getInfos(Individu individu, Integer year) {
@@ -180,12 +196,12 @@ public class DossierService {
     }
 
     @Transactional
-    public void updateDossierIndividu(Long id, DossierIndividuForm dossierIndividuForm) {
+    public void updateDossierIndividu(Long id, DossierIndividuForm dossierIndividuForm, String eppn) {
         Dossier dossierToUpdate = getById(id);
         if (dossierToUpdate.getYear() != utilsService.getCurrentYear()) {
             throw new AgapeYearException();
         }
-        dossierToUpdate.setStatusDossier(dossierIndividuForm.getStatusDossier());
+        changeStatutDossier(id, dossierIndividuForm.getStatusDossier(), eppn);
         dossierToUpdate.setStatusDossierAmenagement(dossierToUpdate.getStatusDossierAmenagement());
         if (dossierIndividuForm.getType() != null) {
             dossierToUpdate.setType(dossierIndividuForm.getType());
@@ -212,6 +228,10 @@ public class DossierService {
 
     public List<String> getAllLibelleFormation() {
         return dossierRepository.findAllLibelleFormation();
+    }
+
+    public List<String> getAllCampus() {
+        return dossierRepository.findAllCampus().stream().filter(StringUtils::hasText).toList();
     }
 
     @Transactional
@@ -369,15 +389,26 @@ public class DossierService {
             predicates.add(cb.or(mdphPredicates.toArray(Predicate[]::new)));
         }
 
-        if (dossierFilter.getSuiviHandisup() != null) {
-            List<Predicate> suiviHandisupPredicates = new ArrayList<>();
-            if (dossierFilter.getSuiviHandisup()) {
-                suiviHandisupPredicates.add(cb.isTrue(dossierRoot.get("suiviHandisup")));
+        if (dossierFilter.getAtypie() != null) {
+            List<Predicate> atypiePredicates = new ArrayList<>();
+            if (dossierFilter.getAtypie()) {
+                atypiePredicates.add(cb.isTrue(dossierRoot.get("atypie")));
             } else {
-                suiviHandisupPredicates.add(cb.isFalse(dossierRoot.get("suiviHandisup")));
-                suiviHandisupPredicates.add(cb.isNull(dossierRoot.get("suiviHandisup")));
+                atypiePredicates.add(cb.isFalse(dossierRoot.get("atypie")));
+                atypiePredicates.add(cb.isNull(dossierRoot.get("atypie")));
             }
-            predicates.add(cb.or(suiviHandisupPredicates.toArray(Predicate[]::new)));
+            predicates.add(cb.or(atypiePredicates.toArray(Predicate[]::new)));
+        }
+
+        if (dossierFilter.getHasScholarship() != null) {
+            List<Predicate> suiviHasScholarshipPredicates = new ArrayList<>();
+            if (dossierFilter.getHasScholarship()) {
+                suiviHasScholarshipPredicates.add(cb.isTrue(dossierRoot.get("hasScholarship")));
+            } else {
+                suiviHasScholarshipPredicates.add(cb.isFalse(dossierRoot.get("hasScholarship")));
+                suiviHasScholarshipPredicates.add(cb.isNull(dossierRoot.get("hasScholarship")));
+            }
+            predicates.add(cb.or(suiviHasScholarshipPredicates.toArray(Predicate[]::new)));
         }
         List<Predicate> composantePredicates = new ArrayList<>();
         for (String codComposante : dossierFilter.getComposante()) {
@@ -469,6 +500,16 @@ public class DossierService {
         if (fonctionAidantPredicates.size() > 0) {
             predicates.add(cb.or(fonctionAidantPredicates.toArray(Predicate[]::new)));
         }
+        if (dossierFilter.getHasScholarship() != null) {
+            List<Predicate> hasScholarshipPredicates = new ArrayList<>();
+            if (dossierFilter.getHasScholarship()) {
+                hasScholarshipPredicates.add(cb.isTrue(dossierRoot.get("hasScholarship")));
+            } else {
+                hasScholarshipPredicates.add(cb.isFalse(dossierRoot.get("hasScholarship")));
+                hasScholarshipPredicates.add(cb.isNull(dossierRoot.get("hasScholarship")));
+            }
+            predicates.add(cb.or(hasScholarshipPredicates.toArray(Predicate[]::new)));
+        }
 
         if (dossierFilter.getNewDossier() != null) {
             if (dossierFilter.getNewDossier()) {
@@ -510,10 +551,10 @@ public class DossierService {
     }
 
     @Transactional
-    public void anonymiseDossiers(Individu individu) {
+    public void anonymiseDossiers(Individu individu, String eppn) {
         List<Dossier> dossiers = dossierRepository.findAllByIndividuId(individu.getId());
         for (Dossier dossier : dossiers) {
-            dossier.setStatusDossier(StatusDossier.ANONYMOUS);
+            changeStatutDossier(dossier.getId(), StatusDossier.ANONYMOUS, eppn);
         }
     }
 

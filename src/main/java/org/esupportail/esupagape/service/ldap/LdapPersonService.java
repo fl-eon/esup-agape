@@ -2,13 +2,18 @@ package org.esupportail.esupagape.service.ldap;
 
 import org.esupportail.esupagape.config.ldap.LdapProperties;
 import org.esupportail.esupagape.exception.AgapeException;
-import org.esupportail.esupagape.exception.AgapeJpaException;
-import org.esupportail.esupagape.repository.ldap.OrganizationalUnitLdapRepository;
 import org.esupportail.esupagape.repository.ldap.PersonLdapRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.ldap.core.AttributesMapper;
 import org.springframework.ldap.core.LdapTemplate;
+import org.springframework.ldap.filter.AndFilter;
+import org.springframework.ldap.filter.EqualsFilter;
+import org.springframework.ldap.filter.LikeFilter;
+import org.springframework.ldap.filter.OrFilter;
+import org.springframework.ldap.query.LdapQuery;
+import org.springframework.ldap.query.LdapQueryBuilder;
+import org.springframework.ldap.query.SearchScope;
 import org.springframework.stereotype.Service;
 
 import javax.naming.directory.SearchControls;
@@ -28,13 +33,10 @@ public class LdapPersonService {
 
     private final PersonLdapRepository personLdapRepository;
 
-    private final OrganizationalUnitLdapRepository organizationalUnitLdapRepository;
-
-    public LdapPersonService(LdapProperties ldapProperties, LdapTemplate ldapTemplate, PersonLdapRepository personLdapRepository, OrganizationalUnitLdapRepository organizationalUnitLdapRepository) {
+    public LdapPersonService(LdapProperties ldapProperties, LdapTemplate ldapTemplate, PersonLdapRepository personLdapRepository) {
         this.ldapProperties = ldapProperties;
         this.ldapTemplate = ldapTemplate;
         this.personLdapRepository = personLdapRepository;
-        this.organizationalUnitLdapRepository = organizationalUnitLdapRepository;
     }
 
     public List<PersonLdap> search(String searchString) {
@@ -51,23 +53,23 @@ public class LdapPersonService {
     }
 
     public String getPersonLdapAttribute(String authName, String attribute) throws AgapeException {
-        if(attribute != null) {
+        if (attribute != null) {
             String formattedFilter = MessageFormat.format(ldapProperties.getUserIdSearchFilter(), (Object[]) new String[]{authName});
             return ldapTemplate.search(ldapProperties.getSearchBase(),
                     formattedFilter,
                     SearchControls.SUBTREE_SCOPE,
                     new String[]{attribute},
                     (AttributesMapper) attrs -> attrs.get(attribute).get().toString()).get(0).toString();
-        }else {
+        } else {
             throw new AgapeException("Attribut is null");
         }
     }
 
     public PersonLdap getPersonLdap(String userName) {
-        String formattedFilter = MessageFormat.format(ldapProperties.getUserIdSearchFilter(), (Object[]) new String[] { userName });
+        String formattedFilter = MessageFormat.format(ldapProperties.getUserIdSearchFilter(), (Object[]) new String[]{userName});
         List<PersonLdap> personLdaps = ldapTemplate.search(ldapProperties.getSearchBase(), formattedFilter, new PersonLdapAttributesMapper());
         PersonLdap personLdap = null;
-        if(personLdaps.size() > 0) {
+        if (personLdaps.size() > 0) {
             personLdap = personLdaps.get(0);
         }
         return personLdap;
@@ -79,22 +81,42 @@ public class LdapPersonService {
         return personLdapRepository.findBySnAndGivenNameAndSchacDateOfBirth(name, firstName, dateOfBirthString);
     }
 
-    public OrganizationalUnitLdap getOrganizationalUnitLdap(String supannCodeEntite) throws AgapeJpaException {
-        List<OrganizationalUnitLdap> organizationalUnitLdaps = organizationalUnitLdapRepository.findBySupannCodeEntite(supannCodeEntite);
-        if(organizationalUnitLdaps.size() > 0) {
-            return organizationalUnitLdaps.get(0);
-        } else {
-            throw new AgapeJpaException(supannCodeEntite + " not fount in OU");
-        }
+//    public List<PersonLdap> searchBySupannEtuIdOrCn(String numEtu, String name) {
+//        return personLdapRepository.findBySupannEtuIdOrCnStartingWithIgnoreCase(numEtu, name);
+//    }
+
+    public List<PersonLdap> findStudents(String search) {
+        AndFilter andFilter = new AndFilter();
+        andFilter.and(new EqualsFilter("eduPersonAffiliation", "student"));
+        andFilter.and(new OrFilter()
+                .or(new LikeFilter("cn", search + "*"))
+                .or(new LikeFilter("supannEtuId", search + "*"))
+                .or(new LikeFilter("supannCodeINE", search + "*")));
+
+        LdapQuery query = LdapQueryBuilder.query()
+                .searchScope(SearchScope.ONELEVEL)
+                .base(ldapProperties.getSearchBase())
+                .countLimit(20)
+                .filter(andFilter);
+
+        return personLdapRepository.findAll(query);
+
     }
 
-    public OrganizationalUnitLdap getEtablissement(String supannEtablissement) {
-        List<OrganizationalUnitLdap> organizationalUnitLdaps = organizationalUnitLdapRepository.findBySupannRefIdAndSupannTypeEntite(supannEtablissement, "Etablissement");
-        if(organizationalUnitLdaps.size() > 0) {
-            return organizationalUnitLdaps.get(0);
-        } else {
-            return null;
-        }
+    public List<PersonLdap> findEmployees(String search) {
+        AndFilter andFilter = new AndFilter();
+        andFilter.and(new EqualsFilter("eduPersonAffiliation", "employee"));
+        andFilter.and(new EqualsFilter("eduPersonAffiliation", "member"));
+        andFilter.and(new OrFilter()
+                .or(new LikeFilter("cn", search + "*"))
+                .or(new LikeFilter("uid", search + "*")));
+
+        LdapQuery query = LdapQueryBuilder.query()
+                .searchScope(SearchScope.ONELEVEL)
+                .base(ldapProperties.getSearchBase())
+                .countLimit(20)
+                .filter(andFilter);
+        return personLdapRepository.findAll(query);
     }
 
 }

@@ -25,7 +25,16 @@ public class IndividuDataSourceService {
 
     public DataSource getDataSourceByName(String name) {
         logger.info("initialize db " + name + " with driver " + individuSourceProperties.getDataSources().get(name).getDriverClassName());
-        return individuSourceProperties.getDataSources().get(name).initializeDataSourceBuilder().type(HikariDataSource.class).build();
+        HikariDataSource ds = new HikariDataSource();
+        ds.setPoolName(name + "-Hikari-Pool");
+        ds.setJdbcUrl(individuSourceProperties.getDataSources().get(name).getUrl());
+        ds.setDriverClassName(individuSourceProperties.getDataSources().get(name).getDriverClassName());
+        ds.setUsername(individuSourceProperties.getDataSources().get(name).getUsername());
+        ds.setPassword(individuSourceProperties.getDataSources().get(name).getPassword());
+        ds.setAutoCommit(false);
+        ds.setMaximumPoolSize(1);
+        ds.setMinimumIdle(0);
+        return ds;
     }
 
     public JdbcTemplate getJdbcTemplateByName(String name) {

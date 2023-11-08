@@ -2,6 +2,7 @@ package org.esupportail.esupagape.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletResponse;
 import org.apache.commons.io.FileUtils;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -12,10 +13,12 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDTrueTypeFont;
 import org.apache.pdfbox.pdmodel.font.encoding.WinAnsiEncoding;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.esupportail.esupagape.config.ApplicationProperties;
+import org.esupportail.esupagape.config.ldap.LdapProperties;
 import org.esupportail.esupagape.dtos.pdfs.CertificatPdf;
 import org.esupportail.esupagape.entity.*;
 import org.esupportail.esupagape.entity.enums.*;
@@ -24,6 +27,10 @@ import org.esupportail.esupagape.exception.AgapeJpaException;
 import org.esupportail.esupagape.exception.AgapeYearException;
 import org.esupportail.esupagape.repository.AmenagementRepository;
 import org.esupportail.esupagape.repository.LibelleAmenagementRepository;
+import org.esupportail.esupagape.repository.UserOthersAffectationsRepository;
+import org.esupportail.esupagape.repository.ldap.OrganizationalUnitLdapRepository;
+import org.esupportail.esupagape.repository.ldap.PersonLdapRepository;
+import org.esupportail.esupagape.service.ldap.OrganizationalUnitLdap;
 import org.esupportail.esupagape.service.ldap.PersonLdap;
 import org.esupportail.esupagape.service.mail.MailService;
 import org.esupportail.esupagape.service.utils.EsupSignatureService;
@@ -39,7 +46,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -56,6 +62,7 @@ public class AmenagementService {
     private static final Logger logger = LoggerFactory.getLogger(AmenagementService.class);
 
     private final ApplicationProperties applicationProperties;
+    private final LdapProperties ldapProperties;
     private final AmenagementRepository amenagementRepository;
     private final DossierService dossierService;
     private final ObjectMapper objectMapper;
@@ -65,9 +72,13 @@ public class AmenagementService {
     private final MailService mailService;
     private final DocumentService documentService;
     private final LibelleAmenagementRepository libelleAmenagementRepository;
+    private final UserOthersAffectationsRepository userOthersAffectationsRepository;
+    private final PersonLdapRepository personLdapRepository;
+    private final OrganizationalUnitLdapRepository organizationalUnitLdapRepository;
 
-    public AmenagementService(ApplicationProperties applicationProperties, AmenagementRepository amenagementRepository, DossierService dossierService, ObjectMapper objectMapper, MessageSource messageSource, UtilsService utilsService, EsupSignatureService esupSignatureService, MailService mailService, DocumentService documentService, LibelleAmenagementRepository libelleAmenagementRepository) {
+    public AmenagementService(ApplicationProperties applicationProperties, LdapProperties ldapProperties, AmenagementRepository amenagementRepository, DossierService dossierService, ObjectMapper objectMapper, MessageSource messageSource, UtilsService utilsService, EsupSignatureService esupSignatureService, MailService mailService, DocumentService documentService, LibelleAmenagementRepository libelleAmenagementRepository, UserOthersAffectationsRepository userOthersAffectationsRepository, PersonLdapRepository personLdapRepository, OrganizationalUnitLdapRepository organizationalUnitLdapRepository) {
         this.applicationProperties = applicationProperties;
+        this.ldapProperties = ldapProperties;
         this.amenagementRepository = amenagementRepository;
         this.dossierService = dossierService;
         this.objectMapper = objectMapper;
@@ -77,6 +88,9 @@ public class AmenagementService {
         this.mailService = mailService;
         this.documentService = documentService;
         this.libelleAmenagementRepository = libelleAmenagementRepository;
+        this.userOthersAffectationsRepository = userOthersAffectationsRepository;
+        this.personLdapRepository = personLdapRepository;
+        this.organizationalUnitLdapRepository = organizationalUnitLdapRepository;
     }
 
     public Amenagement getById(Long id) {
@@ -188,7 +202,7 @@ public class AmenagementService {
             throw new AgapeException("Impossible de créer l'aménagement sans date de fin");
         }
         if (dossier.getStatusDossier().equals(StatusDossier.IMPORTE) || dossier.getStatusDossier().equals(StatusDossier.AJOUT_MANUEL)) {
-            dossier.setStatusDossier(StatusDossier.RECU_PAR_LA_MEDECINE_PREVENTIVE);
+            dossierService.changeStatutDossier(idDossier, StatusDossier.RECU_PAR_LA_MEDECINE_PREVENTIVE, personLdap.getEduPersonPrincipalName());
         }
 
         amenagement.setDossier(dossier);
@@ -230,7 +244,7 @@ public class AmenagementService {
 
             Set<Classification> selectedClassifications = amenagement.getClassification();
             if(amenagement.getAutorisation().equals(Autorisation.OUI)) {
-                amenagementToUpdate.setClassification(selectedClassifications);
+                amenagementToUpdate.getClassification().addAll(selectedClassifications);
             } else {
                 amenagementToUpdate.getClassification().clear();
             }
@@ -245,9 +259,7 @@ public class AmenagementService {
         if (dossier.getStatusDossier().equals(StatusDossier.RECU_PAR_LA_MEDECINE_PREVENTIVE)) {
             if(autorisation.equals(Autorisation.OUI)) {
                 if (selectedClassifications != null && !selectedClassifications.isEmpty()) {
-                    dossier.setClassifications(selectedClassifications);
-                } else {
-                    dossier.setClassifications(Collections.emptySet());
+                    dossier.getClassifications().addAll(selectedClassifications);
                 }
             } else if (autorisation.equals(Autorisation.NON)) {
                 dossier.getClassifications().clear();
@@ -259,7 +271,13 @@ public class AmenagementService {
         }
     }
 
+    public Page<Amenagement> getFullTextSearchScol(StatusAmenagement statusAmenagement, List<String> codComposantes, String campus, String viewedByUid, String notViewedByUid, Integer yearFilter, Pageable pageable) {
+        return amenagementRepository.findByFullTextSearchScol(statusAmenagement, codComposantes, campus, viewedByUid, notViewedByUid, yearFilter, pageable);
+    }
 
+    public Page<Amenagement> getByIndividuNameScol(String fullTextSearch, StatusAmenagement statusAmenagement, List<String> codComposantes, String campus, String viewedByUid, String notViewedByUid, Pageable pageable) {
+        return amenagementRepository.findByIndividuNameScol(fullTextSearch, statusAmenagement, utilsService.getCurrentYear(), codComposantes, campus, viewedByUid, notViewedByUid, pageable);
+    }
 
     public Page<Amenagement> findAllPaged(Pageable pageable) {
         return amenagementRepository.findAll(pageable);
@@ -273,7 +291,7 @@ public class AmenagementService {
         return amenagementRepository.findByIndividuNamePortable(fullTextSearch, utilsService.getCurrentYear(), pageable);
     }
     public Page<Amenagement> getFullTextSearchPorte(String codComposante, Integer yearFilter, Pageable pageable) {
-        return amenagementRepository.findByFullTextSearchPortable(codComposante, yearFilter, pageable);
+        return amenagementRepository.findByFullTextSearchPortable(codComposante, yearFilter - 1, pageable);
     }
 
     public Long countToValidate() {
@@ -281,7 +299,7 @@ public class AmenagementService {
     }
 
     public Long countToPorte() {
-        return amenagementRepository.countToPorte(utilsService.getCurrentYear());
+        return amenagementRepository.countToPorte(utilsService.getCurrentYear() - 1);
     }
 
     @Transactional
@@ -325,9 +343,15 @@ public class AmenagementService {
     public void sendToCertificatWorkflow(Long id) throws AgapeException {
         Amenagement amenagement = getById(id);
         try {
-            byte[] modelBytes = new ClassPathResource("models/certificat.pdf").getInputStream().readAllBytes();
+            byte[] modelBytes;
+            if(StringUtils.hasText(applicationProperties.getModelsPath())) {
+                modelBytes = Files.readAllBytes(new File(applicationProperties.getModelsPath() + "/certificat.pdf").toPath());
+            } else {
+                modelBytes = new ClassPathResource("models/certificat.pdf").getInputStream().readAllBytes();
+            }
             esupSignatureService.send(id, generateDocument(amenagement, modelBytes, TypeWorkflow.CERTIFICAT, false), TypeWorkflow.CERTIFICAT);
         } catch (IOException e) {
+            logger.warn(e.getMessage());
             throw new AgapeException("Envoi vers esup-signature impossible", e);
         }
     }
@@ -336,8 +360,13 @@ public class AmenagementService {
     public void sendToAvisWorkflow(Long id) throws AgapeException {
         Amenagement amenagement = getById(id);
         try {
-            byte[] modelBytes = new ClassPathResource("models/avis.pdf").getInputStream().readAllBytes();
-            esupSignatureService.send(id, generateDocument(amenagement, modelBytes, TypeWorkflow.AVIS, false), TypeWorkflow.AVIS);
+            byte[] modelBytes;
+            if(StringUtils.hasText(applicationProperties.getModelsPath())) {
+                modelBytes = Files.readAllBytes(new File(applicationProperties.getModelsPath() + "/avis.pdf").toPath());
+            } else {
+                modelBytes = new ClassPathResource("models/avis.pdf").getInputStream().readAllBytes();
+            }
+            esupSignatureService.send(id, generateDocument(amenagement, modelBytes, TypeWorkflow.CERTIFICAT, false), TypeWorkflow.CERTIFICAT);            esupSignatureService.send(id, generateDocument(amenagement, modelBytes, TypeWorkflow.AVIS, false), TypeWorkflow.AVIS);
         } catch (IOException e) {
             throw new AgapeException("Envoi vers esup-signature impossible", e);
         }
@@ -364,6 +393,7 @@ public class AmenagementService {
                         amenagement.getDossier());
                 amenagement.setCertificat(certificat);
                 sendAmenagementToIndividu(amenagementId, false);
+                sendAlert(amenagementId);
             }
         } else {
             throw new AgapeException("Impossible de valider un aménagement qui n'est pas au statut Validé par le médecin");
@@ -412,7 +442,7 @@ public class AmenagementService {
     @Transactional
     public void getAvis(Long id, HttpServletResponse httpServletResponse) throws IOException, AgapeException {
         Amenagement amenagement = getById(id);
-        if(!(amenagement.getStatusAmenagement().equals(StatusAmenagement.VALIDE_MEDECIN) || amenagement.getStatusAmenagement().equals(StatusAmenagement.VISE_ADMINISTRATION) || amenagement.getStatusAmenagement().equals(StatusAmenagement.REFUSE_ADMINISTRATION))) {
+        if(!(amenagement.getStatusAmenagement().equals(StatusAmenagement.BROUILLON) || amenagement.getStatusAmenagement().equals(StatusAmenagement.VALIDE_MEDECIN) || amenagement.getStatusAmenagement().equals(StatusAmenagement.VISE_ADMINISTRATION) || amenagement.getStatusAmenagement().equals(StatusAmenagement.REFUSE_ADMINISTRATION))) {
             throw new AgapeException("L'avis ne peut pas être émis");
         }
         byte[] avis;
@@ -457,7 +487,9 @@ public class AmenagementService {
         certificatPdf.setAutresTypeEpreuve(amenagement.getAutresTypeEpreuve());
         certificatPdf.setAutresTempsMajores(amenagement.getAutresTempsMajores());
         certificatPdf.setAmenagementText(amenagementsWithNumbers.toString());
-        certificatPdf.setValideMedecinDate(amenagement.getValideMedecinDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        if (amenagement.getValideMedecinDate() != null) {
+            certificatPdf.setValideMedecinDate(amenagement.getValideMedecinDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        }
         certificatPdf.setNomMedecin(amenagement.getNomMedecin());
         if(amenagement.getStatusAmenagement().equals(StatusAmenagement.VISE_ADMINISTRATION) && typeWorkflow.equals(TypeWorkflow.CERTIFICAT)) {
             certificatPdf.setAdministrationDate(amenagement.getAdministrationDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
@@ -485,12 +517,15 @@ public class AmenagementService {
             PDDocument toFillDocument = PDDocument.load(savedPdf);
             PDField pdField = toFillDocument.getDocumentCatalog().getAcroForm().getField(fieldName);
             if(pdField != null) {
-                pdField.getCOSObject().setString(COSName.DA, "/LiberationSans 11 Tf 0 g");
-                if(datas.containsKey(fieldName)) {
-                    pdField.setValue(datas.get(fieldName));
-                }
-                if(pdField instanceof PDSignatureField && withSign) {
-                    addVisualSignature(amenagement, toFillDocument, pdField.getWidgets().get(0).getRectangle(), fieldName);
+                if(pdField instanceof PDSignatureField) {
+                    if(withSign) {
+                        addVisualSignature(amenagement, toFillDocument, pdField.getWidgets().get(0).getRectangle(), fieldName);
+                    }
+                } else {
+                    pdField.getCOSObject().setString(COSName.DA, "/LiberationSans 11 Tf 0 g");
+                    if(datas.containsKey(fieldName)) {
+                        pdField.setValue(datas.get(fieldName));
+                    }
                 }
                 out = new ByteArrayOutputStream();
                 toFillDocument.save(out);
@@ -499,7 +534,21 @@ public class AmenagementService {
             }
         }
         PDDocument finishedDocument = PDDocument.load(savedPdf);
-        finishedDocument.getDocumentCatalog().getAcroForm().flatten();
+        List<PDField> fields = finishedDocument.getDocumentCatalog().getAcroForm().getFields();
+        List<PDField> dates = fields.stream().filter(f -> f.getFullyQualifiedName().equals("administrationDate")).toList();
+        List<PDField> cleannedFields = fields.stream().filter(f -> !(f instanceof PDSignatureField) && !f.getFullyQualifiedName().equals("administrationDate")).toList();
+        for(PDField field : cleannedFields) {
+            for(PDAnnotationWidget pdAnnotationWidget : field.getWidgets()) {
+                if(pdAnnotationWidget.getPage() == null) {
+                    pdAnnotationWidget.setPage(finishedDocument.getPage(0));
+                }
+            }
+            finishedDocument.getDocumentCatalog().getAcroForm().flatten(Collections.singletonList(field), false);
+        }
+
+        if(!dates.isEmpty()) {
+            finishedDocument.getDocumentCatalog().getAcroForm().getFields().add(dates.get(0));
+        }
         out = new ByteArrayOutputStream();
         finishedDocument.save(out);
         finishedDocument.close();
@@ -511,7 +560,7 @@ public class AmenagementService {
         Amenagement amenagement = getById(amenagementId);
         Individu individu = amenagement.getDossier().getIndividu();
         List<Amenagement> amenagements = amenagementRepository.findAmenagementPrec(individu, year);
-        if(amenagements.size() > 0) {
+        if(!amenagements.isEmpty()) {
             return amenagementRepository.findAmenagementPrec(individu, year).get(0);
         } else {
             return null;
@@ -546,10 +595,10 @@ public class AmenagementService {
         try {
             currentDossier = dossierService.getCurrent(amenagement.getDossier().getIndividu().getId());
             if(currentDossier.getStatusDossier().equals(StatusDossier.IMPORTE) || currentDossier.getStatusDossier().equals(StatusDossier.AJOUT_MANUEL)) {
-                currentDossier.setStatusDossier(StatusDossier.RECONDUIT);
+                dossierService.changeStatutDossier(id, StatusDossier.RECONDUIT, personLdap.getEduPersonPrincipalName());
             }
         } catch (AgapeJpaException e) {
-            currentDossier = dossierService.create(amenagement.getDossier().getIndividu(), TypeIndividu.ETUDIANT, StatusDossier.RECONDUIT);
+            currentDossier = dossierService.create(personLdap.getEduPersonPrincipalName(), amenagement.getDossier().getIndividu(), TypeIndividu.ETUDIANT, StatusDossier.RECONDUIT);
         }
         currentDossier.setStatusDossierAmenagement(StatusDossierAmenagement.PORTE);
         currentDossier.setAmenagementPorte(amenagement);
@@ -564,10 +613,10 @@ public class AmenagementService {
         try {
             currentDossier = dossierService.getCurrent(amenagement.getDossier().getIndividu().getId());
             if(currentDossier.getStatusDossier().equals(StatusDossier.IMPORTE) || currentDossier.getStatusDossier().equals(StatusDossier.AJOUT_MANUEL)) {
-                currentDossier.setStatusDossier(StatusDossier.NON_RECONDUIT);
+                dossierService.changeStatutDossier(id, StatusDossier.NON_RECONDUIT, personLdap.getEduPersonPrincipalName());
             }
         } catch (AgapeJpaException e) {
-            currentDossier = dossierService.create(amenagement.getDossier().getIndividu(), null, StatusDossier.NON_RECONDUIT);
+            currentDossier = dossierService.create(personLdap.getEduPersonPrincipalName(), amenagement.getDossier().getIndividu(), null, StatusDossier.NON_RECONDUIT);
         }
         amenagement.setStatusAmenagement(StatusAmenagement.SUPPRIME);
         currentDossier.setStatusDossierAmenagement(StatusDossierAmenagement.NON);
@@ -623,10 +672,10 @@ public class AmenagementService {
                 amenagement.getDossier().setStatusDossierAmenagement(StatusDossierAmenagement.EXPIRE);
             } else if (amenagement.getIndividuSendDate() == null) {
                 sendAmenagementToIndividu(amenagement.getId(), false);
+                sendAlert(amenagement.getId());
             }
         }
     }
-
 
     @Transactional
     public void sendAmenagementToIndividu(long amenagementId, boolean force) {
@@ -643,10 +692,37 @@ public class AmenagementService {
                     certificat = generateDocument(amenagement, modelBytes, TypeWorkflow.CERTIFICAT, true);
                 }
                 mailService.sendCertificat(new ByteArrayInputStream(certificat), to);
+                amenagement.setIndividuSendDate(LocalDateTime.now());
             } catch (Exception e) {
                 logger.warn("Impossible d'envoyer le certificat par email, amenagementId : " + amenagementId, e);
             }
-            amenagement.setIndividuSendDate(LocalDateTime.now());
+        }
+    }
+
+    @Transactional
+    public void sendAlert(long amenagementId) {
+        Amenagement amenagement = getById(amenagementId);
+        List<String> to = new ArrayList<>();
+        if(StringUtils.hasText(applicationProperties.getTestEmail())) {
+            to.add(applicationProperties.getTestEmail());
+        } else {
+            List<OrganizationalUnitLdap> organizationalUnitLdaps = organizationalUnitLdapRepository.findBySupannRefId(ldapProperties.getAffectationPrincipaleRefIdPrefixFromApo() + amenagement.getDossier().getCodComposante());
+            List<String> affectations = organizationalUnitLdaps.stream().map(OrganizationalUnitLdap::getSupannCodeEntite).distinct().toList();
+            List<PersonLdap> personLdaps = personLdapRepository.findByMemberOf(ldapProperties.getScolariteMemberOfSearch());
+            List<UserOthersAffectations> userOthersAffectations = userOthersAffectationsRepository.findByCodComposante(amenagement.getDossier().getCodComposante());
+            List<String> uids = userOthersAffectations.stream().map(UserOthersAffectations::getUid).toList();
+            for(PersonLdap personLdap : personLdaps) {
+                if(uids.contains(personLdap.getUid()) || affectations.contains(personLdap.getSupannEntiteAffectationPrincipale())) {
+                    to.add(personLdap.getMail());
+                }
+            }
+        }
+        if(amenagement.getStatusAmenagement().equals(StatusAmenagement.VISE_ADMINISTRATION)) {
+            try {
+                mailService.sendAlert(to);
+            } catch (Exception e) {
+                logger.warn("Impossible d'envoyer le mail d'alerte, amenagement : " + amenagementId, e);
+            }
         }
     }
 
@@ -662,5 +738,17 @@ public class AmenagementService {
             }
         }
         libelleAmenagementRepository.save(libelleAmenagement);
+    }
+
+    @Transactional
+    public void viewedByUid(Long amenagementId, String uid) {
+        Amenagement amenagement = getById(amenagementId);
+        amenagement.getViewByUid().add(uid);
+    }
+
+    @Transactional
+    public void notViewedByUid(Long amenagementId, String uid) {
+        Amenagement amenagement = getById(amenagementId);
+        amenagement.getViewByUid().remove(uid);
     }
 }

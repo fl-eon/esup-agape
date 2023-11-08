@@ -52,7 +52,7 @@ public class AideHumaineService {
     }
 
     @Transactional
-    public AideHumaine create(AideHumaine aideHumaine, Long dossierId) {
+    public AideHumaine create(AideHumaine aideHumaine, Long dossierId, String eppn) {
         Dossier dossier = dossierService.getById(dossierId);
         if(dossier.getYear() != utilsService.getCurrentYear()) {
             throw new AgapeYearException();
@@ -60,8 +60,9 @@ public class AideHumaineService {
         aideHumaine.setDossier(dossier);
         if (dossier.getStatusDossier().equals(StatusDossier.IMPORTE)
                 || dossier.getStatusDossier().equals(StatusDossier.AJOUT_MANUEL)
-                || dossier.getStatusDossier().equals(StatusDossier.ACCUEILLI)) {
-            dossier.setStatusDossier(StatusDossier.SUIVI);
+                || dossier.getStatusDossier().equals(StatusDossier.ACCUEILLI)
+                || dossier.getStatusDossier().equals(StatusDossier.RECONDUIT)) {
+            dossierService.changeStatutDossier(dossierId, StatusDossier.SUIVI, eppn);
         }
         recupAidantWithNumEtu(aideHumaine.getNumEtuAidant(), aideHumaine);
         return aideHumaineRepository.save(aideHumaine);

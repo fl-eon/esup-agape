@@ -1,5 +1,6 @@
 package org.esupportail.esupagape.web.controller.administratif;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.esupportail.esupagape.config.ApplicationProperties;
 import org.esupportail.esupagape.entity.Amenagement;
 import org.esupportail.esupagape.entity.Dossier;
@@ -12,6 +13,7 @@ import org.esupportail.esupagape.service.ldap.PersonLdap;
 import org.esupportail.esupagape.service.utils.UtilsService;
 import org.esupportail.esupagape.web.viewentity.Message;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
@@ -23,7 +25,6 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -72,14 +73,25 @@ public class AmenagementAdministratifController {
             statusAmenagements.remove(StatusAmenagement.ENVOYE);
         }
         Page<Amenagement> amenagements;
-        if (StringUtils.hasText(fullTextSearch)) {
-            amenagements = amenagementService.getByIndividuNamePortable(fullTextSearch, pageable);
-        } else if (porte) {
-            amenagements = amenagementService.getFullTextSearchPorte(codComposante, yearFilter, pageable);
+        if (porte) {
+            if (StringUtils.hasText(fullTextSearch)) {
+                amenagements = new PageImpl<>(amenagementService.getFullTextSearchPorte(codComposante, yearFilter, Pageable.unpaged()).getContent()
+                        .stream()
+                        .filter(amenagement -> amenagement.getDossier().getIndividu().getName().equalsIgnoreCase(fullTextSearch) || amenagement.getDossier().getIndividu().getFirstName().equalsIgnoreCase(fullTextSearch) || amenagement.getDossier().getIndividu().getNumEtu().equals(fullTextSearch))
+                        .sorted(Comparator.comparing(Amenagement::getAdministrationDate).reversed())
+                        .limit(1)
+                        .toList());
+            } else {
+                amenagements = amenagementService.getFullTextSearchPorte(codComposante, yearFilter, pageable);
+            }
             statusAmenagements.clear();
             statusAmenagements.add(StatusAmenagement.VISE_ADMINISTRATION);
         } else {
-            amenagements = amenagementService.getFullTextSearch(statusAmenagement, codComposante, yearFilter, pageable);
+            if (StringUtils.hasText(fullTextSearch)) {
+                amenagements = amenagementService.getByIndividuNamePortable(fullTextSearch, pageable);
+            } else {
+                amenagements = amenagementService.getFullTextSearch(statusAmenagement, codComposante, yearFilter, pageable);
+            }
         }
         model.addAttribute("statusAmenagements", statusAmenagements);
         model.addAttribute("amenagements", amenagements);
@@ -89,6 +101,7 @@ public class AmenagementAdministratifController {
         model.addAttribute("codComposante", codComposante);
         model.addAttribute("porte", porte);
         model.addAttribute("yearFilter", yearFilter);
+        model.addAttribute("fullTextSearch", fullTextSearch);
         setModel(model);
         return "administratif/amenagements/list";
     }
@@ -112,6 +125,8 @@ public class AmenagementAdministratifController {
         model.addAttribute("dossiers", dossiers);
         model.addAttribute("currentForm", dossierService.getInfos(amenagement.getDossier().getIndividu(), utilsService.getCurrentYear()).getLibelleFormation());
         model.addAttribute("lastDossier", dossiers.get(0));
+        amenagementService.syncEsupSignature(amenagementId);
+        model.addAttribute("esupSignatureUrl", applicationProperties.getEsupSignatureUrl() + "/user/signrequests/" + amenagement.getCertificatSignatureId());
         Dossier dossier;
         try {
             dossier = dossierService.getCurrent(amenagement.getDossier().getIndividu().getId());
