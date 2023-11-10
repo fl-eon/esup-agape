@@ -462,13 +462,19 @@ public class AmenagementService {
 
     private byte[] generateDocument(Amenagement amenagement, byte[] modelBytes, TypeWorkflow typeWorkflow, boolean withSign) throws IOException {
         CertificatPdf certificatPdf = new CertificatPdf();
-        certificatPdf.setName(amenagement.getDossier().getIndividu().getName());
-        certificatPdf.setFirstname(amenagement.getDossier().getIndividu().getFirstName());
-        certificatPdf.setDateOfBirth(amenagement.getDossier().getIndividu().getDateOfBirth().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
-        certificatPdf.setLibelleFormation(amenagement.getDossier().getLibelleFormation());
-        certificatPdf.setSite(amenagement.getDossier().getComposante());
-        certificatPdf.setAddress(amenagement.getDossier().getIndividu().getFixAddress() + " " + amenagement.getDossier().getIndividu().getFixCP() + " " + amenagement.getDossier().getIndividu().getFixCity());
-        certificatPdf.setNumEtu(amenagement.getDossier().getIndividu().getNumEtu());
+        Dossier dossier = amenagement.getDossier();
+        try {
+            dossier = dossierService.getDossierByAmenagementPorte(amenagement);
+        } catch (AgapeException e) {
+            logger.debug("Amenagement porte not found");
+        }
+        certificatPdf.setName(dossier.getIndividu().getName());
+        certificatPdf.setFirstname(dossier.getIndividu().getFirstName());
+        certificatPdf.setDateOfBirth(dossier.getIndividu().getDateOfBirth().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        certificatPdf.setLibelleFormation(dossier.getLibelleFormation());
+        certificatPdf.setSite(dossier.getComposante());
+        certificatPdf.setAddress(dossier.getIndividu().getFixAddress() + " " + amenagement.getDossier().getIndividu().getFixCP() + " " + amenagement.getDossier().getIndividu().getFixCity());
+        certificatPdf.setNumEtu(dossier.getIndividu().getNumEtu());
         if(amenagement.getTypeAmenagement().equals(TypeAmenagement.CURSUS)) {
             certificatPdf.setEndDate(messageSource.getMessage("amenagement.typeAmenagement.CURSUS", null, Locale.getDefault()));
         } else {
@@ -604,6 +610,7 @@ public class AmenagementService {
         currentDossier.setAmenagementPorte(amenagement);
         currentDossier.setMailValideurPortabilite(personLdap.getMail());
         currentDossier.setNomValideurPortabilite(personLdap.getDisplayName());
+        sendAlert(id);
     }
 
     @Transactional
@@ -721,7 +728,7 @@ public class AmenagementService {
             try {
                 mailService.sendAlert(to);
             } catch (Exception e) {
-                logger.warn("Impossible d'envoyer le mail d'alerte, amenagement : " + amenagementId, e);
+                logger.warn("Impossible d'envoyer le mail d'alerte, aménagement : " + amenagementId, e);
             }
         }
     }
